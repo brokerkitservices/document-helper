@@ -1,11 +1,7 @@
-from typing import Union, List
 from dotenv import load_dotenv
-from langchain_core.prompts import PromptTemplate
-from langchain_core.tools.render import render_text_description
-from langchain.tools import tool, Tool
+from langchain.tools import tool
 from langchain_openai import ChatOpenAI
-from langchain.agents.output_parsers import ReActSingleInputOutputParser
-from langchain.schema.agent import AgentAction, AgentFinish
+from langchain_core.messages import HumanMessage, ToolMessage
 from callbacks import AgentLoggerCallbackHandler
 
 load_dotenv()
@@ -20,89 +16,60 @@ def get_text_length(text: str) -> int:
     return len(text)
 
 
-def find_tool_by_name(tools: List[Tool], tool_name: str) -> Tool:
-    for t in tools:
-        if t.name == tool_name:
-            return t
-    raise ValueError(f"Tool with name {tool_name} not found")
-
-
 if __name__ == "__main__":
-    print("Hello React LangChain!")
+    print("Hello React LangChain with bind_tools!")
+
+    # Define tools
     tools = [get_text_length]
 
-    template = """Answer the following questions as best you can. You have access to the following tools:
+    # Initialize LLM with callbacks
+    llm = ChatOpenAI(temperature=0, callbacks=[AgentLoggerCallbackHandler()])
 
-{tools}
+    # Bind tools to the LLM
+    llm_with_tools = llm.bind_tools(tools)
 
-Use the following format:
+    # Create initial message
+    messages = [
+        HumanMessage(content="What is the length in characters of the text 'Dog'?")
+    ]
 
-Question: the input question you must answer
-Thought: you should always think about what to do
-Action: the action to take, should be one of [{tool_names}]
-Action Input: the input to the action
-Observation: the result of the action
-... (this Thought/Action/Action Input/Observation can repeat N times)
-Thought: I now know the final answer
-Final Answer: the final answer to the original input question
+    # Invoke the LLM with tools
+    response = llm_with_tools.invoke(messages)
+    print(f"AI Response: {response}")
 
-Begin!
+    # Check if the AI wants to use a tool
+    if response.tool_calls:
+        messages.append(response)  # Add AI's response to history
 
-Question: {input}
-Thought: {agent_scratchpad}
-"""
+        # Execute each tool call
+        for tool_call in response.tool_calls:
+            print(f"\nExecuting tool: {tool_call['name']}")
+            print(f"With arguments: {tool_call['args']}")
 
-    prompt = PromptTemplate.from_template(template=template).partial(
-        tools=render_text_description(tools),
-        tool_names=", ".join([t.name for t in tools]),
-    )
+            # Find and execute the tool
+            selected_tool = None
+            for t in tools:
+                if t.name == tool_call["name"]:
+                    selected_tool = t
+                    break
 
-    llm = ChatOpenAI(
-        temperature=0, stop=["\nObservation"], callbacks=[AgentLoggerCallbackHandler()]
-    )
-    intermediate_steps = []
+            if selected_tool:
+                # Execute the tool with the provided arguments
+                tool_result = selected_tool.func(**tool_call["args"])
+                print(f"Tool Output: {tool_result}")
 
-    def format_log_to_str(intermediate_steps):
-        if not intermediate_steps:
-            return ""
-        else:
-            thoughts = ""
-            for action, observation in intermediate_steps:
-                thoughts += f"\nAction: {action.tool}\nAction Input: {action.tool_input}\nObservation: {observation}"
-            return thoughts
+                # Add tool result to messages
+                messages.append(
+                    ToolMessage(content=str(tool_result), tool_call_id=tool_call["id"])
+                )
 
-    agent = (
-        {
-            "input": lambda x: x["input"],
-            "agent_scratchpad": lambda x: format_log_to_str(x["agent_scratchpad"]),
-        }
-        | prompt
-        | llm
-        | ReActSingleInputOutputParser()
-    )
-
-    # Loop until we get a final answer
-    agent_step = ""
-    while not isinstance(agent_step, AgentFinish):
-        agent_step: Union[AgentAction, AgentFinish] = agent.invoke(
-            {
-                "input": "What is the length in characters of the text 'Dog'?",
-                "agent_scratchpad": intermediate_steps,
-            }
-        )
-        print(agent_step)
-
-        if isinstance(agent_step, AgentAction):
-            tool_name = agent_step.tool
-            tool_to_use = find_tool_by_name(tools, tool_name)
-            tool_input = agent_step.tool_input
-
-            observation = tool_to_use.func(str(tool_input))
-            print(f"Tool Output: {observation}")
-            intermediate_steps.append((agent_step, str(observation)))
-
-        if isinstance(agent_step, AgentFinish):
-            # We have the final answer
-            print("\n" + "=" * 50)
-            print(f"FINAL ANSWER: {agent_step.return_values['output']}")
-            print("=" * 50)
+        # Get final response from LLM after tool execution
+        final_response = llm_with_tools.invoke(messages)
+        print("\n" + "=" * 50)
+        print(f"FINAL ANSWER: {final_response.content}")
+        print("=" * 50)
+    else:
+        # If no tool calls, just print the response
+        print("\n" + "=" * 50)
+        print(f"FINAL ANSWER: {response.content}")
+        print("=" * 50)
