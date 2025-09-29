@@ -1,0 +1,10 @@
+# Linguist overrides - properly classify this as a Python project
+*.ipynb linguist-documentation=true
+*.ipynb linguist-detectable=false
+
+# Ensure Python files are recognized
+*.py linguist-detectable=true
+*.py linguist-language=Python
+
+# Mark static assets as vendored
+static/* linguist-vendored=true
